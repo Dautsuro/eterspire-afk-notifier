@@ -63,8 +63,12 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         root.bind("<Unmap>", self._on_unmap)
         try:
-            self._icon = tk.PhotoImage(file=str(tray.ICON_PATH))
-            root.iconphoto(True, self._icon)
+            if sys.platform == "win32":
+                # The .ico holds every size Windows needs (title bar, taskbar, Alt+Tab).
+                root.iconbitmap(default=str(tray.ICON_PATH.with_suffix(".ico")))
+            else:
+                self._icon = tk.PhotoImage(file=str(tray.ICON_PATH))
+                root.iconphoto(True, self._icon)
         except tk.TclError:
             pass
 
@@ -750,6 +754,14 @@ class App:
 
 def main() -> None:
     enable_dpi_awareness()
+    if sys.platform == "win32":
+        import ctypes
+
+        # Own taskbar identity: without it, running from source shows Python's icon in the taskbar.
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Eterspire.AFKNotifier")
+        except (AttributeError, OSError):
+            pass
     root = tk.Tk()
     try:
         ttk.Style(root).theme_use("vista" if sys.platform == "win32" else "clam")
