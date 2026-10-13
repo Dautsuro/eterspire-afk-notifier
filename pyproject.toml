@@ -1,0 +1,32 @@
+[project]
+name = "eterspire-afk-notifier"
+version = "1.0.0"
+description = "Sound, desktop and phone alerts when Eterspire's AFK fishing or woodcutting needs you."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+    "mss>=9.0",
+    "qrcode>=7.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.gui-scripts]
+eterspire-notifier = "eterspire_notifier.app:main"
+
+[tool.setuptools]
+packages = ["eterspire_notifier"]
+
+[tool.setuptools.package-data]
+eterspire_notifier = ["templates/*.png", "sounds/*.wav"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
