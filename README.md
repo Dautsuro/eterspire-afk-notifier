@@ -28,7 +28,10 @@ only must not be minimized.
 ## Phone notifications (optional)
 
 Nothing to set up if you don't want them: they're off until you tick
-**Send a notification to my phone** for an alert. To use them, pick one service in the **Phone** tab:
+**Send a notification to my phone** for an alert. To use them, tick one or more services in the
+**Phone** tab (each service has its own sub-tab with a **Use …** box and a **Send a test** button).
+Every ticked service gets every phone notification, so you can, for example, get them both in
+the ntfy app and in a Discord channel:
 
 ![Phone tab](docs/screenshot-phone.png)
 
@@ -37,7 +40,7 @@ Nothing to set up if you don't want them: they're off until you tick
   2. Tap **+** and subscribe to the topic shown in the app, or scan the QR code with your phone camera.
      The topic is a random name made just for you; anyone who knows it can read your
      notifications, so don't share it.
-  3. Click **Send a test notification**.
+  3. Click **Send a test**.
 - **Discord**: create a webhook in your own server (*Server Settings → Integrations → Webhooks →
   New Webhook → Copy Webhook URL*), paste it, and make sure that channel's notifications are on
   in the Discord phone app.
@@ -55,20 +58,32 @@ Each alert has its own delay: *"only if the in-game pop-up is still open after N
 | Sound on/off, custom `.wav` sound, test button | Alerts, per alert | on, built-in chime |
 | Desktop notification on/off | Alerts, per alert | on |
 | Phone notification on/off | Alerts, per alert | off |
+| Which phone services to use (any combination) | Phone | ntfy |
 | Phone delay (only if the pop-up is still open after N s) | Alerts, per alert | 0 s inventory, 60 s fishing spot |
 | Volume | Alerts → General | 80 |
 | Repeat the sound every N s while the pop-up stays open | Alerts → General | off |
 | How long the desktop notification stays | Alerts → General | 8 s |
-| Start watching when the app opens | Alerts → General | on |
 | Game window title, or watch all screens | Detection | `Eterspire` |
 | How often to check | Detection | every 1 s |
 | Strictness of the match | Detection | 0.70 |
+| Start watching when the app opens | App | on |
+| Minimizing or closing hides the app in the notification area | App | off |
+| Start hidden in the notification area | App | off |
 
 Settings are saved automatically in `%APPDATA%\EterspireNotifier\config.json`.
 
 The desktop notification shows in the bottom-right corner without taking the keyboard focus
 away from the game; click it to dismiss it. It also disappears by itself when you close the
 pop-up in the game.
+
+### Hiding in the notification area
+
+In the **App** tab, tick **Minimizing or closing the window hides the app in the notification
+area**. The app then keeps watching from the taskbar's hidden icons (the **^** arrow next to the
+clock): click its icon to open the window, right-click it to start/stop watching or to quit. With
+**Start hidden in the notification area** it opens straight there.
+
+![App tab](docs/screenshot-app.png)
 
 ## Troubleshooting
 
@@ -123,7 +138,8 @@ python -m venv .venv
 | `eterspire_notifier/tracker.py` | Pop-up open/closed state, phone delay, sound repeats |
 | `eterspire_notifier/alerts.py` | Sounds, ntfy / Discord / Telegram |
 | `eterspire_notifier/overlay.py` | Desktop notification that doesn't steal focus |
-| `tools/make_sounds.py` | Generates the built-in sounds |
+| `eterspire_notifier/tray.py` | Notification-area icon |
+| `tools/make_sounds.py`, `tools/make_icon.py` | Generate the built-in sounds and the app icon |
 
 `build.bat` builds `dist\EterspireNotifier.exe` with PyInstaller. Pushing a `v*` tag to GitHub
 runs the tests, builds the exe and attaches it to the release

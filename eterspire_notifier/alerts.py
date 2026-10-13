@@ -102,9 +102,15 @@ def ntfy_url(phone: PhoneSettings) -> str:
     return phone.ntfy_server.strip().rstrip("/") + "/" + urllib.parse.quote(phone.ntfy_topic.strip())
 
 
-def send_phone(phone: PhoneSettings, title: str, message: str, tags: str = "", urgent: bool = False) -> None:
-    """Send a notification with the configured service. Raises PhoneError on failure."""
-    service = phone.service
+SERVICES = {"ntfy": "ntfy", "discord": "Discord", "telegram": "Telegram"}  # id -> display name
+
+
+def enabled_services(phone: PhoneSettings) -> list[str]:
+    return [service for service in SERVICES if getattr(phone, f"use_{service}")]
+
+
+def send_service(phone: PhoneSettings, service: str, title: str, message: str, tags: str = "", urgent: bool = False):
+    """Send a notification with one service. Raises PhoneError on failure."""
     if service == "ntfy":
         if not phone.ntfy_topic.strip():
             raise PhoneError("no ntfy topic set")
@@ -145,16 +151,30 @@ def telegram_find_chat_id(token: str) -> str:
     raise PhoneError("no messages yet: open your bot in Telegram, send it any message, then try again")
 
 
-def send_phone_async(phone: PhoneSettings, title: str, message: str, tags: str = "", urgent: bool = False, on_done=None):
-    """Send in the background; ``on_done(error_or_None)`` is called from the worker thread."""
+def send_phone_async(
+    phone: PhoneSettings,
+    title: str,
+    message: str,
+    tags: str = "",
+    urgent: bool = False,
+    services: list[str] | None = None,
+    on_done=None,
+) -> list[str]:
+    """Send with each service (default: the ticked ones) in the background and return their ids.
 
-    def run():
+    ``on_done(service, error_or_None)`` is called from a worker thread once per service.
+    """
+    services = enabled_services(phone) if services is None else services
+
+    def run(service):
         try:
-            send_phone(phone, title, message, tags, urgent)
+            send_service(phone, service, title, message, tags, urgent)
             error = None
         except PhoneError as exc:
             error = str(exc)
         if on_done:
-            on_done(error)
+            on_done(service, error)
 
-    threading.Thread(target=run, daemon=True).start()
+    for service in services:
+        threading.Thread(target=run, args=(service,), daemon=True).start()
+    return services

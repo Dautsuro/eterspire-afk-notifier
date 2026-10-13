@@ -13,7 +13,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from . import __version__, alerts, config
+from . import __version__, alerts, config, tray
 from .capture import enable_dpi_awareness
 from .detector import EVENTS, TEMPLATES, Match
 from .monitor import Monitor, scan_once
@@ -39,11 +39,6 @@ MESSAGES = {
     "inventory_full_logs": ("Inventory full", "You can't carry any more logs."),
     "spot_empty": ("Fishing spot empty", "This fishing spot has run out of fish. Find a new spot!"),
 }
-SERVICES = [
-    ("ntfy", "ntfy app (recommended: free, no account)"),
-    ("discord", "Discord (webhook)"),
-    ("telegram", "Telegram (bot)"),
-]
 
 
 def describe(event: str, match: Match | None) -> tuple[str, str]:
@@ -59,11 +54,19 @@ class App:
         self.queue: queue.Queue = queue.Queue()
         self.monitor: Monitor | None = None
         self.toasts = Toasts(root)
+        self.tray: tray.TrayIcon | None = None
         self._save_job = None
+        self._told_about_tray = False
 
         root.title("Eterspire AFK Notifier")
         root.minsize(600, 560)
-        root.protocol("WM_DELETE_WINDOW", self.quit)
+        root.protocol("WM_DELETE_WINDOW", self.on_close)
+        root.bind("<Unmap>", self._on_unmap)
+        try:
+            self._icon = tk.PhotoImage(file=str(tray.ICON_PATH))
+            root.iconphoto(True, self._icon)
+        except tk.TclError:
+            pass
 
         self._build_header()
         notebook = ttk.Notebook(root)
@@ -71,10 +74,14 @@ class App:
         notebook.add(self._build_alerts_tab(notebook), text="  Alerts  ")
         notebook.add(self._build_phone_tab(notebook), text="  Phone  ")
         notebook.add(self._build_detection_tab(notebook), text="  Detection  ")
+        notebook.add(self._build_app_tab(notebook), text="  App  ")
         notebook.add(self._build_log_tab(notebook), text="  Log  ")
 
         root.after(100, self._poll)
         self.log(f"Eterspire AFK Notifier {__version__}. Settings: {config.config_path()}")
+        self._update_tray()
+        if self.tray and self.settings.start_hidden:
+            root.withdraw()
         if self.settings.autostart:
             self.start()
 
@@ -203,11 +210,6 @@ class App:
         ttk.Label(general, text="seconds (0 = until the pop-up is closed or you click it)").grid(
             row=2, column=2, sticky="w", pady=(6, 0)
         )
-        ttk.Checkbutton(
-            general,
-            text="Start watching as soon as the app opens",
-            variable=self.bind(tk.BooleanVar(), self.settings, "autostart"),
-        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
         general.columnconfigure(2, weight=1)
         return tab
 
@@ -252,48 +254,58 @@ class App:
         tab = ttk.Frame(parent, padding=12)
         ttk.Label(
             tab,
-            text="Optional: get alerts on your phone while you're away from the PC.\n"
-            "Choose a service, set it up once, then tick \"Send a notification to my phone\" in the Alerts tab.",
+            text="Optional: get alerts on your phone while you're away from the PC. Tick one or more\n"
+            "services and set them up once, then tick \"Send a notification to my phone\" in the Alerts tab.",
             justify="left",
         ).pack(anchor="w")
 
-        choice = ttk.Frame(tab)
-        choice.pack(fill="x", pady=8)
-        service = self.bind(tk.StringVar(), phone, "service", on_change=lambda: self._show_service())
-        for value, label in SERVICES:
-            ttk.Radiobutton(choice, text=label, value=value, variable=service).pack(anchor="w")
-
-        self.service_frames = {
-            "ntfy": self._build_ntfy(tab),
-            "discord": self._build_discord(tab),
-            "telegram": self._build_telegram(tab),
-        }
-
         test = ttk.Frame(tab)
         test.pack(side="bottom", fill="x", pady=(8, 0))
-        ttk.Button(test, text="Send a test notification", command=self.test_phone).pack(side="left")
+        ttk.Button(test, text="Test all ticked services", command=self.test_phone).pack(side="left")
         self.phone_result = tk.StringVar()
-        ttk.Label(test, textvariable=self.phone_result, wraplength=380).pack(side="left", padx=10)
-        self._show_service()
+        ttk.Label(test, textvariable=self.phone_result, wraplength=400, justify="left").pack(side="left", padx=10)
+
+        self.service_tabs = ttk.Notebook(tab)
+        self.service_tabs.pack(fill="both", expand=True, pady=(8, 0))
+        self.service_pages = {}
+        builders = {"ntfy": self._build_ntfy, "discord": self._build_discord, "telegram": self._build_telegram}
+        hints = {
+            "ntfy": "Use ntfy (recommended: free app, no account needed)",
+            "discord": "Use Discord (a webhook in your own server)",
+            "telegram": "Use Telegram (your own bot)",
+        }
+        for service, build in builders.items():
+            page = ttk.Frame(self.service_tabs, padding=10)
+            top = ttk.Frame(page)
+            top.pack(fill="x", pady=(0, 8))
+            ttk.Checkbutton(
+                top,
+                text=hints[service],
+                variable=self.bind(tk.BooleanVar(), phone, f"use_{service}", on_change=self._update_service_tabs),
+            ).pack(side="left")
+            ttk.Button(top, text="Send a test", command=lambda sv=service: self.test_phone([sv])).pack(side="right")
+            build(page).pack(fill="both", expand=True)
+            self.service_tabs.add(page)
+            self.service_pages[service] = page
+        self._update_service_tabs()
         return tab
 
-    def _show_service(self) -> None:
-        for name, frame in self.service_frames.items():
-            if name == self.settings.phone.service:
-                frame.pack(fill="both", expand=True)
-            else:
-                frame.pack_forget()
+    def _update_service_tabs(self) -> None:
+        """Tab titles show which services are in use."""
+        for service, page in self.service_pages.items():
+            used = getattr(self.settings.phone, f"use_{service}")
+            self.service_tabs.tab(page, text=f"  {'✔ ' if used else ''}{alerts.SERVICES[service]}  ")
 
     def _build_ntfy(self, parent) -> ttk.Frame:
         phone = self.settings.phone
-        frame = ttk.LabelFrame(parent, text="  ntfy  ", padding=10)
+        frame = ttk.Frame(parent)
         left = ttk.Frame(frame)
         left.pack(side="left", fill="both", expand=True)
         steps = (
             "1. Install the free \"ntfy\" app (Google Play, F-Droid or App Store).\n"
             "2. In the app tap +, and subscribe to the topic below\n"
             "    (or scan the QR code with your phone camera).\n"
-            "3. Click \"Send a test notification\"."
+            "3. Click \"Send a test\"."
         )
         ttk.Label(left, text=steps, justify="left").pack(anchor="w")
 
@@ -347,7 +359,7 @@ class App:
                     canvas.create_rectangle(x0, y0, x0 + cell, y0 + cell, fill="black", outline="")
 
     def _build_discord(self, parent) -> ttk.Frame:
-        frame = ttk.LabelFrame(parent, text="  Discord  ", padding=10)
+        frame = ttk.Frame(parent)
         steps = (
             "1. In your own Discord server: Server Settings → Integrations → Webhooks → New Webhook.\n"
             "2. Pick a channel, click \"Copy Webhook URL\" and paste it below.\n"
@@ -362,7 +374,7 @@ class App:
 
     def _build_telegram(self, parent) -> ttk.Frame:
         phone = self.settings.phone
-        frame = ttk.LabelFrame(parent, text="  Telegram  ", padding=10)
+        frame = ttk.Frame(parent)
         steps = (
             "1. In Telegram, open @BotFather, send /newbot and follow the steps.\n"
             "2. Paste the bot token it gives you below.\n"
@@ -387,15 +399,31 @@ class App:
         self.root.clipboard_append(text)
         self.phone_result.set("Copied!")
 
-    def test_phone(self) -> None:
-        self.phone_result.set("Sending…")
-        alerts.send_phone_async(
+    def test_phone(self, services: list[str] | None = None) -> None:
+        """Send a test with the given services (default: the ticked ones)."""
+        self._test_results = {}
+        sent = alerts.send_phone_async(
             self.settings.phone,
             "Eterspire Notifier",
             "Test notification: phone alerts are working!",
             tags="white_check_mark",
-            on_done=lambda error: self.post("phone_test", error),
+            services=services,
+            on_done=lambda service, error: self.post("phone_test", (service, error)),
         )
+        self._test_pending = list(sent)
+        self.phone_result.set("Sending…" if sent else "Tick at least one service first.")
+
+    def _show_test_results(self) -> None:
+        lines = []
+        for service in self._test_pending:
+            name = alerts.SERVICES[service]
+            if service not in self._test_results:
+                lines.append(f"{name}: sending…")
+            elif self._test_results[service]:
+                lines.append(f"{name}: failed, {self._test_results[service]}")
+            else:
+                lines.append(f"{name}: sent! Check your phone.")
+        self.phone_result.set("\n".join(lines))
 
     def find_chat_id(self) -> None:
         token = self.settings.phone.telegram_token
@@ -497,6 +525,96 @@ class App:
             self.monitor.reload_templates()
         self.log("Templates reloaded.")
 
+    # ------------------------------------------------------------ app tab
+
+    def _build_app_tab(self, parent) -> ttk.Frame:
+        s = self.settings
+        tab = ttk.Frame(parent, padding=12)
+        box = ttk.LabelFrame(tab, text="  Startup  ", padding=10)
+        box.pack(fill="x")
+        ttk.Checkbutton(
+            box, text="Start watching as soon as the app opens", variable=self.bind(tk.BooleanVar(), s, "autostart")
+        ).pack(anchor="w")
+
+        box = ttk.LabelFrame(tab, text="  Notification area (hidden icons)  ", padding=10)
+        box.pack(fill="x", pady=10)
+        hide = ttk.Checkbutton(
+            box,
+            text="Minimizing or closing the window hides the app in the notification area",
+            variable=self.bind(tk.BooleanVar(), s, "hide_to_tray", on_change=self._update_tray),
+        )
+        hide.pack(anchor="w")
+        self.start_hidden_check = ttk.Checkbutton(
+            box, text="Start hidden in the notification area", variable=self.bind(tk.BooleanVar(), s, "start_hidden")
+        )
+        self.start_hidden_check.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+        ttk.Label(
+            box,
+            text="The app keeps watching while hidden. Its icon is under the ^ arrow next to the clock:\n"
+            "click it to open this window again, right-click it to start/stop watching or to quit.",
+            foreground="#666",
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+        if not tray.available():
+            hide.state(["disabled"])
+            ttk.Label(box, text="Not available: the 'pystray' package is missing.", foreground="#b00").pack(anchor="w")
+        self._update_start_hidden_state()
+        return tab
+
+    def _update_start_hidden_state(self) -> None:
+        if hasattr(self, "start_hidden_check"):
+            enabled = self.settings.hide_to_tray and tray.available()
+            self.start_hidden_check.state(["!disabled"] if enabled else ["disabled"])
+
+    def _update_tray(self) -> None:
+        """Create or remove the tray icon to match the setting."""
+        self._update_start_hidden_state()
+        wanted = self.settings.hide_to_tray and tray.available()
+        if wanted and not self.tray:
+            try:
+                self.tray = tray.TrayIcon(
+                    on_show=lambda: self.post("tray_show"),
+                    on_toggle=lambda: self.post("tray_toggle"),
+                    on_quit=lambda: self.post("tray_quit"),
+                    is_watching=lambda: self.monitor is not None,
+                )
+                self.tray.set_tooltip(f"Eterspire AFK Notifier: {self.status.get()}")
+            except Exception as exc:  # noqa: BLE001 - no tray icon is not fatal
+                self.tray = None
+                self.log(f"Could not create the tray icon: {exc}")
+        elif not wanted and self.tray:
+            self.tray.stop()
+            self.tray = None
+            self.show_window()
+
+    def hide_window(self) -> None:
+        self.root.withdraw()
+        if not self._told_about_tray:
+            self._told_about_tray = True
+            self.toasts.show(
+                "tray",
+                "Still watching",
+                "Eterspire Notifier is hidden under the ^ arrow next to the clock. Click its icon to open it.",
+                "#888",
+                6,
+            )
+
+    def show_window(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _on_unmap(self, event) -> None:
+        # Minimize button: hide in the notification area instead of the taskbar.
+        if event.widget is self.root and self.tray and self.root.state() == "iconic":
+            self.root.after(0, self.hide_window)
+
+    def on_close(self) -> None:
+        if self.tray:
+            self.hide_window()
+        else:
+            self.quit()
+
     # ------------------------------------------------------------ log tab
 
     def _build_log_tab(self, parent) -> ttk.Frame:
@@ -520,7 +638,7 @@ class App:
         self.monitor.start()
         self.toggle_button.configure(text="Stop watching")
         self.dot.itemconfigure(self.dot_id, fill="#3c3")
-        self.status.set("Starting…")
+        self._set_status("Starting…")
         self.log("Started watching.")
 
     def stop(self) -> None:
@@ -530,10 +648,15 @@ class App:
         self.monitor = None
         self.toggle_button.configure(text="Start watching")
         self.dot.itemconfigure(self.dot_id, fill="#999")
-        self.status.set("Not watching")
+        self._set_status("Not watching")
         for event in EVENTS:
             self.toasts.close(event)
         self.log("Stopped watching.")
+
+    def _set_status(self, text: str) -> None:
+        self.status.set(text)
+        if self.tray:
+            self.tray.set_tooltip(f"Eterspire AFK Notifier: {text}")
 
     def _poll(self) -> None:
         try:
@@ -547,19 +670,27 @@ class App:
     def _handle(self, kind: str, payload) -> None:
         if kind == "status":
             if self.monitor:
-                self.status.set(payload)
+                self._set_status(payload)
             self.log(payload)
+        elif kind == "tray_show":
+            self.show_window()
+        elif kind == "tray_toggle":
+            self.toggle()
+        elif kind == "tray_quit":
+            self.quit()
         elif kind in ("log", "error"):
             self.log(payload)
         elif kind == "action":
             self._on_action(*payload)
         elif kind == "phone_test":
-            self.phone_result.set(f"Failed: {payload}" if payload else "Sent! Check your phone.")
+            service, error = payload
+            self._test_results[service] = error
+            self._show_test_results()
         elif kind == "chat_id":
             chat_id, error = payload
             if chat_id:
                 self.chat_id.set(chat_id)
-                self.phone_result.set("Chat ID found. Now send a test notification.")
+                self.phone_result.set("Chat ID found. Now click \"Send a test\".")
             else:
                 self.phone_result.set(error)
         elif kind == "scan":
@@ -589,21 +720,28 @@ class App:
             text = message
             if cfg.phone_delay > 0:
                 text += f" (pop-up open for {cfg.phone_delay}s)"
-            self.log(f"Sending phone notification: {title}")
-            alerts.send_phone_async(
+            sent = alerts.send_phone_async(
                 self.settings.phone,
                 f"Eterspire: {title}",
                 text,
                 tags=EVENT_INFO[event]["tags"],
                 urgent=True,
-                on_done=lambda error: error and self.post("error", f"Phone notification failed: {error}"),
+                on_done=lambda service, error: error
+                and self.post("error", f"{alerts.SERVICES[service]} notification failed: {error}"),
             )
+            if sent:
+                self.log(f"Sending phone notification ({', '.join(alerts.SERVICES[x] for x in sent)}): {title}")
+            else:
+                self.log("No phone notification sent: no service is ticked in the Phone tab.")
         elif action == CLOSED:
             self.toasts.close(event)
             self.log(f"Pop-up closed: {title}")
 
     def quit(self) -> None:
         self.stop()
+        if self.tray:
+            self.tray.stop()
+            self.tray = None
         if self._save_job:
             self.root.after_cancel(self._save_job)
         self.save()

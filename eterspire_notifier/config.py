@@ -41,7 +41,10 @@ class EventSettings:
 
 @dataclass
 class PhoneSettings:
-    service: str = "ntfy"  # ntfy | discord | telegram
+    # Every ticked service gets the notifications.
+    use_ntfy: bool = True
+    use_discord: bool = False
+    use_telegram: bool = False
     ntfy_server: str = "https://ntfy.sh"
     ntfy_topic: str = field(default_factory=new_ntfy_topic)
     discord_webhook: str = ""
@@ -65,6 +68,8 @@ class Settings:
     match_threshold: float = 0.70  # how closely the pop-up text must match the reference (0-1)
 
     autostart: bool = True  # start watching as soon as the app opens
+    hide_to_tray: bool = False  # minimizing or closing the window hides it in the notification area
+    start_hidden: bool = False  # open straight into the notification area (needs hide_to_tray)
 
     def event(self, name: str) -> EventSettings:
         return getattr(self, name)
@@ -93,10 +98,21 @@ def config_path() -> Path:
     return config_dir() / "config.json"
 
 
+def _migrate(data: dict) -> dict:
+    phone = data.get("phone")
+    # Up to 1.0.0 only one phone service could be chosen.
+    if isinstance(phone, dict) and "service" in phone and not any(k.startswith("use_") for k in phone):
+        for service in ("ntfy", "discord", "telegram"):
+            phone[f"use_{service}"] = phone["service"] == service
+    return data
+
+
 def load() -> Settings:
     settings = Settings()
     try:
-        _merge(settings, json.loads(config_path().read_text(encoding="utf-8")))
+        data = json.loads(config_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            _merge(settings, _migrate(data))
     except (OSError, ValueError):
         pass
     return settings

@@ -24,6 +24,8 @@ jobs:
           python -m PyInstaller --noconfirm --onefile --windowed --name EterspireNotifier
           --add-data "eterspire_notifier\templates;eterspire_notifier\templates"
           --add-data "eterspire_notifier\sounds;eterspire_notifier\sounds"
+          --add-data "eterspire_notifier\assets;eterspire_notifier\assets"
+          --icon eterspire_notifier\assets\icon.ico --hidden-import pystray._win32
           run.py
       - uses: actions/upload-artifact@v4
         with:

@@ -27,3 +27,11 @@ def test_corrupt_file_gives_defaults(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     config.config_path().write_text("{not json")
     assert config.load().volume == 80
+
+
+def test_single_service_from_1_0_0_is_migrated(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    config.config_path().write_text(json.dumps({"phone": {"service": "discord", "discord_webhook": "https://x"}}))
+    phone = config.load().phone
+    assert (phone.use_ntfy, phone.use_discord, phone.use_telegram) == (False, True, False)
+    assert phone.discord_webhook == "https://x"
